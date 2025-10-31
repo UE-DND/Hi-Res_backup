@@ -1,0 +1,158 @@
+name: Update Repository Stats
+
+on:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+jobs:
+  update-stats:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          lfs: false
+      
+      - name: Calculate repository stats
+        id: stats
+        run: |
+          NON_LFS_SIZE=$(find . -type f -not -path "./.git/*" -not -path "./.github/*" -exec stat -f%z {} + 2>/dev/null | awk '{s+=$1} END {print s}' || find . -type f -not -path "./.git/*" -not -path "./.github/*" -exec stat -c%s {} + | awk '{s+=$1} END {print s}')
+          
+          LFS_SIZE=0
+          while IFS= read -r file; do
+            if [ -f "$file" ]; then
+              if head -n 1 "$file" 2>/dev/null | grep -q "^version https://git-lfs.github.com/spec/v1"; then
+                file_size=$(grep "^size " "$file" | awk '{print $2}')
+                if [ -n "$file_size" ]; then
+                  LFS_SIZE=$((LFS_SIZE + file_size))
+                fi
+              fi
+            fi
+          done < <(git lfs ls-files -n 2>/dev/null || find . -type f \( -name "*.mp3" -o -name "*.flac" -o -name "*.dff" -o -name "*.wav" -o -name "*.aac" -o -name "*.m4a" -o -name "*.ogg" -o -name "*.wma" \))
+          
+          SIZE_BYTES=$((NON_LFS_SIZE + LFS_SIZE))
+          
+          if [ $SIZE_BYTES -lt 1024 ]; then
+            SIZE="${SIZE_BYTES}B"
+          elif [ $SIZE_BYTES -lt 1048576 ]; then
+            SIZE="$(awk "BEGIN {printf \"%.1f\", $SIZE_BYTES/1024}")KB"
+          elif [ $SIZE_BYTES -lt 1073741824 ]; then
+            SIZE="$(awk "BEGIN {printf \"%.1f\", $SIZE_BYTES/1048576}")MB"
+          else
+            SIZE="$(awk "BEGIN {printf \"%.2f\", $SIZE_BYTES/1073741824}")GB"
+          fi
+          
+          FILE_COUNT=$(find . -type f -not -path "./.git/*" -not -path "./.github/*" | wc -l)
+          
+          # Extract audio formats from .gitattributes and count audio files
+          if [ -f ".gitattributes" ]; then
+            # Extract extensions from .gitattributes
+            AUDIO_EXTS=$(grep "filter=lfs" .gitattributes | awk '{print $1}' | sed 's/\*\.//g' | tr '\n' '|' | sed 's/|$//')
+            echo "Audio formats from .gitattributes: $AUDIO_EXTS"
+            
+            # Build find command dynamically
+            FIND_CMD="find . -type f \( "
+            FIRST=true
+            for ext in $(echo $AUDIO_EXTS | tr '|' ' '); do
+              if [ "$FIRST" = true ]; then
+                FIND_CMD="$FIND_CMD -name \"*.$ext\""
+                FIRST=false
+              else
+                FIND_CMD="$FIND_CMD -o -name \"*.$ext\""
+              fi
+            done
+            FIND_CMD="$FIND_CMD \) -not -path \"./.git/*\" -not -path \"./.github/*\""
+            
+            TRACK_COUNT=$(eval $FIND_CMD | wc -l)
+          else
+            # Fallback if .gitattributes doesn't exist
+            TRACK_COUNT=$(find . -type f \( -name "*.mp3" -o -name "*.flac" -o -name "*.dff" -o -name "*.wav" -o -name "*.aac" -o -name "*.m4a" -o -name "*.ogg" -o -name "*.wma" \) -not -path "./.git/*" -not -path "./.github/*" | wc -l)
+          fi
+          
+          DIR_COUNT=$(find . -type d -not -path "./.git" -not -path "./.git/*" | wc -l)
+          TOTAL_COUNT=$((FILE_COUNT + DIR_COUNT - 1))
+          
+          # Count artists (top-level directories excluding .git and .github)
+          ARTIST_COUNT=$(find . -maxdepth 1 -type d -not -name "." -not -name ".git" -not -name ".github" | wc -l)
+          
+          # Count albums (second-level directories that contain audio files)
+          ALBUM_COUNT=0
+          if [ -f ".gitattributes" ]; then
+            AUDIO_EXTS=$(grep "filter=lfs" .gitattributes | awk '{print $1}' | sed 's/\*\.//g')
+            
+            # Find all second-level directories
+            while IFS= read -r album_dir; do
+              # Check if this directory contains any audio files
+              HAS_AUDIO=false
+              for ext in $AUDIO_EXTS; do
+                if find "$album_dir" -maxdepth 1 -type f -name "*.$ext" | grep -q .; then
+                  HAS_AUDIO=true
+                  break
+                fi
+              done
+              
+              if [ "$HAS_AUDIO" = true ]; then
+                ALBUM_COUNT=$((ALBUM_COUNT + 1))
+              fi
+            done < <(find . -mindepth 2 -maxdepth 2 -type d)
+          else
+            # Fallback: count all second-level directories
+            ALBUM_COUNT=$(find . -mindepth 2 -maxdepth 2 -type d | wc -l)
+          fi
+          
+          echo "size=$SIZE" >> $GITHUB_OUTPUT
+          echo "file_count=$FILE_COUNT" >> $GITHUB_OUTPUT
+          echo "track_count=$TRACK_COUNT" >> $GITHUB_OUTPUT
+          echo "total_count=$TOTAL_COUNT" >> $GITHUB_OUTPUT
+          echo "artist_count=$ARTIST_COUNT" >> $GITHUB_OUTPUT
+          echo "album_count=$ALBUM_COUNT" >> $GITHUB_OUTPUT
+          
+          echo "Repository Size: $SIZE"
+          echo "  - Non-LFS: $(awk "BEGIN {printf \"%.2f\", $NON_LFS_SIZE/1048576}")MB"
+          echo "  - LFS: $(awk "BEGIN {printf \"%.2f\", $LFS_SIZE/1073741824}")GB"
+          echo "File Count: $FILE_COUNT"
+          echo "Track Count: $TRACK_COUNT"
+          echo "Total Count (Files + Dirs): $TOTAL_COUNT"
+          echo "Artist Count: $ARTIST_COUNT"
+          echo "Album Count: $ALBUM_COUNT"
+      
+      - name: Update README badges
+        run: |
+          SIZE="${{ steps.stats.outputs.size }}"
+          FILE_COUNT="${{ steps.stats.outputs.file_count }}"
+          TRACK_COUNT="${{ steps.stats.outputs.track_count }}"
+          TOTAL_COUNT="${{ steps.stats.outputs.total_count }}"
+          ARTIST_COUNT="${{ steps.stats.outputs.artist_count }}"
+          ALBUM_COUNT="${{ steps.stats.outputs.album_count }}"
+          
+          SIZE_ENCODED=$(echo "$SIZE" | sed 's/ /%20/g')
+          
+          SIZE_BADGE="![Repo Size](https://img.shields.io/badge/Repo%20Size-${SIZE_ENCODED}-blue?style=for-the-badge)"
+          TRACK_BADGE="![Tracks](https://img.shields.io/badge/Tracks-${TRACK_COUNT}-brightgreen?style=for-the-badge)"
+          ARTIST_BADGE="![Artists](https://img.shields.io/badge/Artists-${ARTIST_COUNT}-orange?style=for-the-badge)"
+          ALBUM_BADGE="![Albums](https://img.shields.io/badge/Albums-${ALBUM_COUNT}-yellow?style=for-the-badge)"
+          FILE_BADGE="![Files](https://img.shields.io/badge/Files-${FILE_COUNT}-green?style=for-the-badge)"
+          
+          sed -i "1s|.*|$SIZE_BADGE|" README.md
+          sed -i "2s|.*|$TRACK_BADGE|" README.md
+          sed -i "3s|.*|$ARTIST_BADGE|" README.md
+          sed -i "4s|.*|$ALBUM_BADGE|" README.md
+          sed -i "5s|.*|$FILE_BADGE|" README.md
+      
+      - name: Commit and push if changed
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          
+          if git diff --quiet README.md; then
+            echo "No changes to commit"
+          else
+            git add README.md
+            git commit -m "chore: update repository stats [skip ci]"
+            git push
+          fi
