@@ -1,5 +1,5 @@
 ![Repo Size](https://img.shields.io/badge/Repo%20Size-17.59GB-blue?style=for-the-badge)
-![Tracks](https://img.shields.io/badge/Tracks-0-brightgreen?style=for-the-badge)
+![Tracks](https://img.shields.io/badge/Tracks-237-brightgreen?style=for-the-badge)
 ![Artists](https://img.shields.io/badge/Artists-75-orange?style=for-the-badge)
-![Albums](https://img.shields.io/badge/Albums-137-yellow?style=for-the-badge)
-![Files](https://img.shields.io/badge/Files-242-green?style=for-the-badge)
+![Albums](https://img.shields.io/badge/Albums-131-yellow?style=for-the-badge)
+![Files](https://img.shields.io/badge/Files-239-green?style=for-the-badge)
